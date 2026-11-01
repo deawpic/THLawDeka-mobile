@@ -1,0 +1,284 @@
+import json
+import re
+import os
+import unittest
+
+BENCHMARK_PATH = os.path.join(os.path.dirname(__file__), "..", "harness", "benchmark_cases.json")
+AGENTS_MD_PATH = os.path.join(os.path.dirname(__file__), "..", ".agents", "AGENTS.md")
+ROOT_AGENTS_MD_PATH = os.path.join(os.path.dirname(__file__), "..", "AGENTS.md")
+LEGAL_ADVISOR_PATH = os.path.join(os.path.dirname(__file__), "..", ".agents", "skills", "legal_advisor", "SKILL.md")
+
+EXPECTED_10_TOPICS = [
+    "บทสรุปของสถานการณ์ว่าเข้าข่ายประเด็นอะไร (Summary)",
+    "หมวดหมู่สำหรับข้อกฎหมายหลัก (Category)",
+    "รายการของข้อกฎหมาย/มาตราที่เกี่ยวข้องโดยตรง (Laws",
+    "ประเภทคดีเป็นภาษาไทย (Case Category)",
+    "ประเภทของศาลที่ตัดสินคดีนี้โดยตรง (Competent Court)",
+    "แนวทางต่อสู้คดีของ โจทก์ / ผู้ร้อง / ผู้เสียหาย (Plaintiff Strategy)",
+    "แนวทางต่อสู้คดีของ จำเลย / ผู้ถูกกล่าวหา (Defendant Strategy)",
+    "แนวทางทำคดีความของพนักงานสอบสวนหรือเจ้าหน้าที่ตำรวจ (Investigator Guideline)",
+    "แนวโน้มคำตัดสินของศาลสูงสุด หรือศาลฎีกา (Supreme Court Trend)",
+    "คำแนะนำเพิ่มเติมเบื้องต้นเพื่อความปลอดภัยของฝ่ายผู้ใช้ (Advice)"
+]
+
+class TestLegalBenchmarks(unittest.TestCase):
+
+    def test_root_agents_md_single_source_of_truth(self):
+        """ตรวจสอบว่า AGENTS.md ที่ Root เป็น Single Source of Truth ตาม Google Harness Spec และไม่มี .agents/AGENTS.md ซ้ำซ้อน"""
+        self.assertTrue(os.path.exists(ROOT_AGENTS_MD_PATH), "Root AGENTS.md must exist")
+        self.assertFalse(os.path.exists(AGENTS_MD_PATH), ".agents/AGENTS.md should be removed to prevent prompt duplication")
+
+    def test_benchmark_cases_structure(self):
+        self.assertTrue(os.path.exists(BENCHMARK_PATH), "benchmark_cases.json must exist")
+        with open(BENCHMARK_PATH, "r", encoding="utf-8") as f:
+            cases = json.load(f)
+        self.assertGreaterEqual(len(cases), 10, "Must contain at least 10 benchmark cases")
+        for c in cases:
+            self.assertIn("id", c)
+            self.assertIn("title", c)
+            self.assertIn("user_query", c)
+            self.assertIn("ground_truth", c)
+            gt = c["ground_truth"]
+            self.assertIn("category", gt)
+            self.assertIn("statutes", gt)
+            self.assertIn("case_type", gt)
+            self.assertIn("competent_court", gt)
+            self.assertIn("prescription_years", gt)
+            self.assertIn("anti_sycophancy_check", gt)
+            self.assertIn("mcp_search_keywords", gt)
+
+    def test_agents_md_contains_all_10_topics(self):
+        self.assertTrue(os.path.exists(ROOT_AGENTS_MD_PATH), "AGENTS.md must exist")
+        with open(ROOT_AGENTS_MD_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        for topic in EXPECTED_10_TOPICS:
+            self.assertIn(topic, content, f"AGENTS.md missing topic: {topic}")
+
+    def test_legal_advisor_contains_irac_and_guardrails(self):
+        self.assertTrue(os.path.exists(LEGAL_ADVISOR_PATH), "legal_advisor/SKILL.md must exist")
+        with open(LEGAL_ADVISOR_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        self.assertIn("IRAC", content)
+        self.assertIn("Deka Grounding Gate", content)
+        self.assertIn("Anti-Sycophancy", content)
+        self.assertIn("mcp_resilience_guardian", content)
+
+    def test_anti_hallucination_deka_regex_detector(self):
+        fake_response_with_hallucination = (
+            "หัวข้อที่ 9: แนวคำพิพากษาศาลฎีกาที่ 9876/2563 ได้ตัดสินว่าการกู้ยืมเงิน..."
+        )
+        fake_response_grounded_fallback = (
+            "หัวข้อที่ 9: แนวบรรทัดฐานคำตัดสินศาลฎีกาเคยวินิจฉัยว่าการยืมเงินผ่านสื่ออิเล็กทรอนิกส์... "
+            "(หมายเหตุ: ไม่สามารถดึงเลขที่ฎีกาจริงได้เนื่องจากระบบเชื่อมต่อฐานข้อมูลภายนอกไม่พร้อมใช้งาน)"
+        )
+        
+        deka_regex = re.compile(r"ฎีกาที่\s*\d+/\d{2,4}")
+        
+        self.assertIsNotNone(deka_regex.search(fake_response_with_hallucination), "Should detect unverified deka number")
+        self.assertIsNone(deka_regex.search(fake_response_grounded_fallback), "Fallback should not contain deka number")
+
+    def test_benchmark_evaluator_scoring(self):
+        from harness.evaluator import LegalBenchmarkEvaluator
+        evaluator = LegalBenchmarkEvaluator()
+
+        sample_response = (
+            "1. บทสรุป: ยืมเงิน 50,000 บาทแล้วไม่คืน\n"
+            "2. หมวดหมู่: กฎหมายแพ่งและพาณิชย์ - กู้ยืมเงิน\n"
+            "3. รายการของข้อกฎหมาย: ป.พ.พ. มาตรา 653 และ พ.ร.บ. ธุรกรรมทางอิเล็กทรอนิกส์ มาตรา 7-9\n"
+            "4. ประเภทคดี: คดีแพ่ง\n"
+            "5. ประเภทของศาล: ศาลแขวง\n"
+            "6. แนวทางต่อสู้คดีของ โจทก์: เตรียมหลักฐานแชทและสลิป\n"
+            "7. แนวทางต่อสู้คดีของ จำเลย: โต้แย้งพยานหลักฐาน\n"
+            "8. แนวทางทำคดีของพนักงานสอบสวน: คดีแพ่ง ตำรวจไม่มีอำนาจสอบสวน\n"
+            "9. แนวโน้มคำตัดสินของศาลฎีกา: บรรทัดฐานศาลฎีกาว่าด้วยสัญญายืมเงินทางแชท\n"
+            "10. คำแนะนำเพิ่มเติม: ระวังอายุความ 10 ปี"
+        )
+        result = evaluator.evaluate_response("case-01-civil-loan", sample_response)
+        self.assertTrue(result["passed"])
+        self.assertGreaterEqual(result["total_score"], 80.0)
+        self.assertEqual(result["rubric_scores"]["structure_10_topics"], 20.0)
+
+    def test_land_dispute_case_output_benchmark(self):
+        from harness.evaluator import LegalBenchmarkEvaluator
+        from harness.cache import LegalMcpCache
+        evaluator = LegalBenchmarkEvaluator()
+        
+        # Verify case-05 exists
+        case5 = evaluator.get_case_by_id("case-05-land-title-dispute")
+        self.assertIsNotNone(case5)
+        self.assertIn("ส.ค.1", case5["title"])
+
+        # Evaluate output/บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_ข้อพิพาทที่ดินสค1_นส3ก.md
+        output_file = os.path.join(
+            os.path.dirname(__file__), "..", "output", "บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_ข้อพิพาทที่ดินสค1_นส3ก.md"
+        )
+        self.assertTrue(os.path.exists(output_file))
+        cache = LegalMcpCache()
+        verified_dekas = ["269/2511", "3071/2554", "1164/2514", "15216/2551", "3379/2532", "1196/2535"]
+        result = evaluator.evaluate_file(
+            output_file,
+            "case-05-land-title-dispute",
+            verified_deka_citations=verified_dekas,
+            cache=cache
+        )
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["total_score"], 100.0)
+        self.assertEqual(result["rubric_scores"]["structure_10_topics"], 20.0)
+        self.assertEqual(result["rubric_scores"]["statute_coverage"], 30.0)
+        self.assertEqual(result["rubric_scores"]["competent_court_accuracy"], 20.0)
+        self.assertEqual(result["rubric_scores"]["anti_hallucination"], 20.0)
+        self.assertEqual(result["rubric_scores"]["anti_sycophancy"], 10.0)
+
+    def test_benchmark_cases_includes_case6_and_case7(self):
+        """ตรวจสอบว่าชุดทดสอบครอบคลุม Case 6 (สมรสซ้อน/สถานะบุตร) และ Case 7 (พรากผู้เยาว์ ม.319)"""
+        from harness.evaluator import LegalBenchmarkEvaluator
+        evaluator = LegalBenchmarkEvaluator()
+
+        # Case 6: Family / Bigamy / Legitimate Child
+        case6 = evaluator.get_case_by_id("case-06-family-bigamy-child-status")
+        self.assertIsNotNone(case6, "case-06 must exist in benchmark suite")
+        self.assertIn("กฎหมายครอบครัวและมรดก", case6["ground_truth"]["category"])
+        c6_sections = [str(s["section"]) for s in case6["ground_truth"]["statutes"]]
+        self.assertTrue(any("1452" in s for s in c6_sections))
+        self.assertTrue(any("1536" in s for s in c6_sections))
+        self.assertIn("ศาลเยาวชนและครอบครัว", case6["ground_truth"]["competent_court"])
+
+        # Case 7: Statutory Rape of Minor / CCC 319
+        case7 = evaluator.get_case_by_id("case-07-statutory-rape-minor")
+        self.assertIsNotNone(case7, "case-07 must exist in benchmark suite")
+        self.assertIn("กฎหมายอาญา", case7["ground_truth"]["category"])
+        c7_sections = [str(s["section"]) for s in case7["ground_truth"]["statutes"]]
+        self.assertTrue(any("319" in s for s in c7_sections))
+        self.assertIn("ศาลอาญา", case7["ground_truth"]["competent_court"])
+
+    def test_benchmark_cases_includes_advanced_specialized_domains(self):
+        """ตรวจสอบว่าชุดทดสอบครอบคลุมกลุ่มกฎหมายเฉพาะทางขั้นสูง: Case 8 (ปกครอง), Case 9 (PDPA), Case 10 (ทรัพย์สินทางปัญญา)"""
+        from harness.evaluator import LegalBenchmarkEvaluator
+        evaluator = LegalBenchmarkEvaluator()
+
+        # Case 8: Administrative Law
+        case8 = evaluator.get_case_by_id("case-08-administrative-unlawful-order")
+        self.assertIsNotNone(case8, "case-08 must exist in benchmark suite")
+        self.assertIn("กฎหมายปกครอง", case8["ground_truth"]["category"])
+        c8_sections = [str(s["section"]) for s in case8["ground_truth"]["statutes"]]
+        self.assertTrue(any("30" in s for s in c8_sections))
+        self.assertTrue(any("42" in s for s in c8_sections))
+        self.assertIn("ศาลปกครอง", case8["ground_truth"]["competent_court"])
+
+        # Case 9: PDPA
+        case9 = evaluator.get_case_by_id("case-09-pdpa-unauthorized-disclosure")
+        self.assertIsNotNone(case9, "case-09 must exist in benchmark suite")
+        self.assertIn("PDPA", case9["ground_truth"]["category"])
+        c9_sections = [str(s["section"]) for s in case9["ground_truth"]["statutes"]]
+        self.assertTrue(any("27" in s for s in c9_sections))
+        self.assertTrue(any("77" in s for s in c9_sections))
+        self.assertIn("ศาลแพ่ง", case9["ground_truth"]["competent_court"])
+
+        # Case 10: Intellectual Property (IP&IT)
+        case10 = evaluator.get_case_by_id("case-10-ip-trademark-infringement")
+        self.assertIsNotNone(case10, "case-10 must exist in benchmark suite")
+        self.assertIn("ทรัพย์สินทางปัญญา", case10["ground_truth"]["category"])
+        c10_sections = [str(s["section"]) for s in case10["ground_truth"]["statutes"]]
+        self.assertTrue(any("108" in s for s in c10_sections))
+        self.assertIn("ศาลทรัพย์สินทางปัญญาและการค้าระหว่างประเทศกลาง", case10["ground_truth"]["competent_court"])
+
+    def test_classify_artifact_categories(self):
+        """ตรวจสอบการจำแนกประเภทไฟล์ Artifact ทั้ง 5 ประเภทอย่างแม่นยำ"""
+        from harness.evaluator import classify_artifact, ArtifactType
+
+        t1, c1 = classify_artifact("บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_ข้อพิพาทที่ดินสค1_นส3ก.md")
+        self.assertEqual(t1, ArtifactType.FULL_10_TOPICS)
+        self.assertEqual(c1, "case-05-land-title-dispute")
+
+        t2, c2 = classify_artifact("บทวิเคราะห์ข้อกฎหมาย_กรณีสมรสซ้อน_สถานะบุตร_นายด.md")
+        self.assertEqual(t2, ArtifactType.COMPREHENSIVE_ANALYSIS)
+        self.assertEqual(c2, "case-06-family-bigamy-child-status")
+
+        t3, c3 = classify_artifact("fourcorners_เทียบฎีกา_ข้อพิพาทที่ดินสค1_นส3ก.md")
+        self.assertEqual(t3, ArtifactType.DEKA_RESEARCH)
+        self.assertEqual(c3, "case-05-land-title-dispute")
+
+        t4, c4 = classify_artifact("land_sale_contract_case_analysis.md")
+        self.assertEqual(t4, ArtifactType.CONTRACT_OPINION)
+        self.assertEqual(c4, "case-05-land-title-dispute")
+
+        t5, c5 = classify_artifact("legal_mcp_cache_spec_and_features.md")
+        self.assertEqual(t5, ArtifactType.SYSTEM_DOC)
+        self.assertIsNone(c5)
+
+        # Advanced Specialized Domains
+        t6, c6 = classify_artifact("บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_คำสั่งทางปกครอง_เพิกถอน.md")
+        self.assertEqual(t6, ArtifactType.FULL_10_TOPICS)
+        self.assertEqual(c6, "case-08-administrative-unlawful-order")
+
+        t7, c7 = classify_artifact("บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_PDPA_ข้อมูลส่วนบุคคลรั่วไหล.md")
+        self.assertEqual(t7, ArtifactType.FULL_10_TOPICS)
+        self.assertEqual(c7, "case-09-pdpa-unauthorized-disclosure")
+
+        t8, c8 = classify_artifact("บทวิเคราะห์ข้อกฎหมาย_10หัวข้อ_เครื่องหมายการค้า_สินค้าปลอม.md")
+        self.assertEqual(t8, ArtifactType.FULL_10_TOPICS)
+        self.assertEqual(c8, "case-10-ip-trademark-infringement")
+
+    def test_audit_output_directory_all_pass(self):
+        """ตรวจสอบว่าไฟล์ทั้งหมดในโฟลเดอร์ output/ ผ่านเกณฑ์การตรวจตาม Rubric ของตนเอง 100%"""
+        from harness.evaluator import LegalBenchmarkEvaluator
+        from harness.cache import LegalMcpCache
+        evaluator = LegalBenchmarkEvaluator()
+        cache = LegalMcpCache()
+
+        results = evaluator.audit_output_directory(cache=cache)
+        self.assertGreaterEqual(len(results), 5, "output/ directory must contain at least 5 markdown files")
+        for r in results:
+            self.assertTrue(
+                r.get("passed", False),
+                f"File {r.get('file_evaluated')} failed evaluation: findings={r.get('findings')}, error={r.get('error')}"
+            )
+            self.assertGreaterEqual(r.get("total_score", 0.0), 80.0)
+
+    def test_diagram_table_standards_and_no_ascii(self):
+        """ตรวจสอบว่า AGENTS.md และ legal_advisor ระบุมาตรฐาน Mermaid และ Markdown Table ห้ามใช้ ASCII text"""
+        with open(ROOT_AGENTS_MD_PATH, "r", encoding="utf-8") as f:
+            root_content = f.read()
+        self.assertIn("Mermaid", root_content)
+        self.assertIn("Markdown Table", root_content)
+        self.assertIn("ASCII", root_content)
+        self.assertIn("ห้ามใช้ ASCII", root_content)
+
+        with open(LEGAL_ADVISOR_PATH, "r", encoding="utf-8") as f:
+            advisor_content = f.read()
+        self.assertIn("Mermaid", advisor_content)
+        self.assertIn("Markdown Table", advisor_content)
+        self.assertIn("ห้ามใช้ ASCII", advisor_content)
+
+    def test_chat_only_pdf_export_recommendations(self):
+        """ตรวจสอบว่าคำแนะนำการแปลง PDF ถูกกำหนดให้แสดงใน Chat เท่านั้น ไม่บันทึกลงในไฟล์"""
+        with open(ROOT_AGENTS_MD_PATH, "r", encoding="utf-8") as f:
+            root_content = f.read()
+        self.assertIn("แสดงใน Chat เท่านั้น", root_content)
+        self.assertIn("ไม่ต้องบันทึกลงในไฟล์", root_content)
+        self.assertIn("ห้ามบันทึกคำแนะนำโปรแกรมเสริมในการแปลง PDF ลงในไฟล์", root_content)
+
+        with open(LEGAL_ADVISOR_PATH, "r", encoding="utf-8") as f:
+            advisor_content = f.read()
+        self.assertIn("แสดงในแชทเท่านั้น", advisor_content)
+        self.assertIn("ไม่ต้องบันทึกลงในไฟล์", advisor_content)
+        self.assertIn("ห้ามบันทึกคำแนะนำโปรแกรมเสริมในการแปลง PDF ลงในไฟล์", advisor_content)
+
+    def test_mermaid_syntax_in_all_agent_and_skill_configs(self):
+        """ตรวจสอบว่าบล็อก Mermaid ทั้งหมดใน AGENTS.md และ SKILL.md ผ่านการตรวจสอบไวยากรณ์ 100%"""
+        from harness.verifier import validate_mermaid_syntax
+        
+        for file_path in [
+            ROOT_AGENTS_MD_PATH,
+            os.path.join(os.path.dirname(__file__), "..", ".agents", "skills", "deka_citation_verifier", "SKILL.md")
+        ]:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            audit = validate_mermaid_syntax(content)
+            self.assertTrue(audit["passed"], f"Mermaid issues in {file_path}: {audit['issues']}")
+            self.assertGreaterEqual(audit["total_diagrams"], 1, f"Expected at least 1 Mermaid diagram in {file_path}")
+
+if __name__ == "__main__":
+    unittest.main()

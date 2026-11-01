@@ -1,0 +1,254 @@
+import os
+import shutil
+import tempfile
+import unittest
+from harness.verifier import (
+    extract_all_deka_numbers,
+    extract_all_statute_citations,
+    detect_unverified_deka_citations,
+    sanitize_hallucinated_deka_numbers,
+    detect_absolute_guarantees,
+    audit_response_for_hallucinations,
+    validate_mermaid_syntax,
+    validate_markdown_tables,
+    detect_prohibited_ascii
+)
+from harness.cache import LegalMcpCache
+
+class TestAntiHallucination(unittest.TestCase):
+
+    def test_extract_all_deka_variants(self):
+        sample_text = (
+            "ตามคำพิพากษาศาลฎีกาที่ 1234/2565 และคำพิพากษาฎีกาที่ 5678/2564 "
+            "อีกทั้งยังมี ฎีกาที่ 999/2563 และ ฎ. 888/2562 รวมถึง ฎีกาเลขที่ 777/2561"
+        )
+        extracted = extract_all_deka_numbers(sample_text)
+        self.assertIn("1234/2565", extracted)
+        self.assertIn("5678/2564", extracted)
+        self.assertIn("999/2563", extracted)
+        self.assertIn("888/2562", extracted)
+        self.assertIn("777/2561", extracted)
+        self.assertEqual(len(extracted), 5)
+
+    def test_detect_unverified_citations(self):
+        sample_text = "คำพิพากษาศาลฎีกาที่ 1234/2565 และ ฎีกาที่ 9999/2566"
+        verified_payload = ["1234/2565"] # Only 1234/2565 is verified from MCP
+        
+        unverified = detect_unverified_deka_citations(sample_text, verified_payload)
+        self.assertEqual(unverified, ["9999/2566"])
+
+    def test_sanitize_hallucinated_numbers(self):
+        sample_text = "ตามคำพิพากษาศาลฎีกาที่ 9999/2566 ได้วางหลักการว่าการยืมเงิน..."
+        sanitized = sanitize_hallucinated_deka_numbers(sample_text, verified_payloads=[])
+        self.assertNotIn("9999/2566", sanitized)
+        self.assertIn("แนวคำพิพากษาศาลฎีกาที่พึงเทียบเคียง", sanitized)
+
+    def test_detect_judicial_discretion_violations(self):
+        bad_text = "หากท่านนำสืบตามนี้ ท่านจะ ชนะคดีแน่นอน 100% อย่างแน่นอน"
+        violations = detect_absolute_guarantees(bad_text)
+        self.assertGreater(len(violations), 0)
+
+    def test_extract_all_statute_citations(self):
+        text = "อ้างอิงตาม ป.พ.พ. มาตรา 1378 และ ประมวลกฎหมายที่ดิน มาตรา 61 รวมถึง พ.ร.บ.คุ้มครองแรงงาน"
+        statutes = extract_all_statute_citations(text)
+        self.assertIn("ป.พ.พ.", statutes)
+        self.assertIn("ประมวลกฎหมายที่ดิน", statutes)
+        self.assertIn("พ.ร.บ.คุ้มครองแรงงาน", statutes)
+
+    def test_auto_grounding_via_cache_oracle(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            db_path = os.path.join(temp_dir, "test_cache.db")
+            cache = LegalMcpCache(db_path=db_path)
+            cache.set(
+                provider="thai_legal",
+                tool_name="search_cases",
+                arguments={"query": "สิทธิครอบครอง"},
+                raw_payload={"results": [{"deka_citation": "คำพิพากษาศาลฎีกาที่ 15216/2551"}]}
+            )
+            text = "ตามคำพิพากษาศาลฎีกาที่ 15216/2551 เจ้าของเดิมสละการครอบครอง"
+            # Without cache or verified_payloads: fails
+            audit_fail = audit_response_for_hallucinations(text, verified_payloads=[])
+            self.assertFalse(audit_fail["passed"])
+            
+            # With cache auto-grounding: passes!
+            audit_pass = audit_response_for_hallucinations(text, cache=cache)
+            self.assertTrue(audit_pass["passed"])
+            self.assertEqual(len(audit_pass["unverified_deka_numbers"]), 0)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_audit_response_clean_pass(self):
+        clean_text = (
+            "หัวข้อที่ 9: แนวบรรทัดฐานคำตัดสินศาลฎีกาเคยวินิจฉัยว่า การยืมเงินผ่านสื่ออิเล็กทรอนิกส์ "
+            "ถือเป็นหลักฐานเป็นหนังสือตามกฎหมายธุรกรรมทางอิเล็กทรอนิกส์\n"
+            "(หมายเหตุ: ไม่สามารถดึงเลขที่ฎีกาจริงได้เนื่องจากระบบเชื่อมต่อฐานข้อมูลภายนอกไม่พร้อมใช้งาน)"
+        )
+        audit = audit_response_for_hallucinations(clean_text, verified_payloads=[])
+        self.assertTrue(audit["passed"])
+        self.assertEqual(len(audit["violations"]), 0)
+
+    def test_audit_response_unverified_failure(self):
+        hallucinated_text = "หัวข้อที่ 9: ตามคำพิพากษาศาลฎีกาที่ 9876/2560 ชนะคดีแน่นอน 100%"
+        audit = audit_response_for_hallucinations(hallucinated_text, verified_payloads=[])
+        self.assertFalse(audit["passed"])
+        self.assertEqual(len(audit["violations"]), 2) # Deka Grounding Gate + Judicial Discretion Gate
+
+    def test_mermaid_class_diagram_with_thai_fails(self):
+        bad_mermaid = (
+            "```mermaid\n"
+            "classDiagram\n"
+            "    class นาย_ส_พนักงานอัยการ {\n"
+            "        +สถานะ: สามี\n"
+            "    }\n"
+            "```"
+        )
+        res = validate_mermaid_syntax(bad_mermaid)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("Lexical Error", res["issues"][0]["error"])
+
+        audit = audit_response_for_hallucinations(bad_mermaid)
+        self.assertFalse(audit["passed"])
+        self.assertTrue(any(v["gate"] == "Mermaid Diagram Gate" for v in audit["violations"]))
+
+    def test_mermaid_flowchart_unquoted_thai_label_fails(self):
+        bad_mermaid = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "    PersonS[นาย ส (พนักงานอัยการ)] --> PersonD[นาย ด]\n"
+            "```"
+        )
+        res = validate_mermaid_syntax(bad_mermaid)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+
+    def test_mermaid_flowchart_quoted_thai_passes(self):
+        good_mermaid = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            '    PersonS["<b>นาย ส (พนักงานอัยการ)</b><br/>สถานะ: สามี"] --> PersonD["<b>นาย ด</b>"]\n'
+            "```"
+        )
+        res = validate_mermaid_syntax(good_mermaid)
+        self.assertTrue(res["passed"])
+        self.assertEqual(len(res["issues"]), 0)
+
+        audit = audit_response_for_hallucinations(good_mermaid)
+        self.assertTrue(audit["passed"])
+
+    def test_saved_report_passes_mermaid_validation(self):
+        report_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "บทวิเคราะห์ข้อกฎหมาย_กรณีสมรสซ้อน_สถานะบุตร_นายด.md")
+        if os.path.exists(report_path):
+            with open(report_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            res = validate_mermaid_syntax(content)
+            self.assertTrue(res["passed"], f"Saved report has mermaid issues: {res['issues']}")
+
+    def test_markdown_table_valid_passes(self):
+        valid_table = (
+            "| ลำดับ | ประเด็นกฎหมาย | ผลทางคดี |\n"
+            "| :---: | :--- | :--- |\n"
+            "| 1 | สัญญาจะซื้อจะขาย | มีผลบังคับใช้ |\n"
+            "| 2 | เบี้ยปรับ | ศาลมีอำนาจปรับลด |\n"
+        )
+        res = validate_markdown_tables(valid_table)
+        self.assertTrue(res["passed"])
+        self.assertEqual(res["total_tables"], 1)
+        self.assertEqual(len(res["issues"]), 0)
+
+        audit = audit_response_for_hallucinations(valid_table)
+        self.assertTrue(audit["passed"])
+
+    def test_markdown_table_missing_separator_fails(self):
+        broken_table = (
+            "| หัวข้อ 1 | หัวข้อ 2 |\n"
+            "| ข้อมูล 1 | ข้อมูล 2 |\n"
+        )
+        res = validate_markdown_tables(broken_table)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("ไม่พบแถวเส้นแบ่ง", res["issues"][0]["error"])
+
+        audit = audit_response_for_hallucinations(broken_table)
+        self.assertFalse(audit["passed"])
+        self.assertTrue(any(v["gate"] == "Markdown Table Gate" for v in audit["violations"]))
+
+    def test_markdown_table_column_mismatch_fails(self):
+        mismatched_table = (
+            "| ข้อ | รายละเอียด | หมายเหตุ |\n"
+            "| :--- | :--- | :--- |\n"
+            "| 1 | ข้อมูลขาดคอลัมน์ |\n"
+        )
+        res = validate_markdown_tables(mismatched_table)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("ไม่ตรงกับหัวตาราง", res["issues"][0]["error"])
+
+    def test_markdown_table_unclosed_pipes_fails(self):
+        unclosed_table = (
+            "หัวข้อ 1 | หัวข้อ 2\n"
+            "| :--- | :--- |\n"
+            "| ข้อมูล 1 | ข้อมูล 2 |\n"
+        )
+        res = validate_markdown_tables(unclosed_table)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+
+    def test_prohibited_ascii_box_fails(self):
+        ascii_box_text = (
+            "+--------------------------+\n"
+            "| กล่องข้อความแบบ ASCII     |\n"
+            "+--------------------------+\n"
+        )
+        res = detect_prohibited_ascii(ascii_box_text)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("เส้นกรอบกล่อง ASCII", res["issues"][0]["error"])
+
+        audit = audit_response_for_hallucinations(ascii_box_text)
+        self.assertFalse(audit["passed"])
+        self.assertTrue(any(v["gate"] == "Prohibited ASCII Gate" for v in audit["violations"]))
+
+    def test_prohibited_ascii_unicode_box_fails(self):
+        unicode_box_text = (
+            "┌──────────────────────────┐\n"
+            "│ กล่องข้อความ Unicode Box │\n"
+            "└──────────────────────────┘\n"
+        )
+        res = detect_prohibited_ascii(unicode_box_text)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("Unicode Box Drawing", res["issues"][0]["error"])
+
+    def test_prohibited_ascii_pseudo_flowchart_fails(self):
+        pseudo_flow_text = "[นาย ก (ผู้ร้อง)] --> [นาย ข (ผู้คัดค้าน)]"
+        res = detect_prohibited_ascii(pseudo_flow_text)
+        self.assertFalse(res["passed"])
+        self.assertGreater(len(res["issues"]), 0)
+        self.assertIn("ผังกล่อง ASCII", res["issues"][0]["error"])
+
+    def test_prohibited_ascii_in_backticks_allowed(self):
+        # ข้อความที่อธิบายกฎโดยอ้างอิงใน inline code backticks ต้องไม่ถูกตรวจจับผิดพลาด (No False Positive)
+        doc_text = "ห้ามใช้เส้นกรอบเช่น `+---+` หรือ `┌─┐` หรือ `[A] --> [B]` ในคำตอบ"
+        res = detect_prohibited_ascii(doc_text)
+        self.assertTrue(res["passed"])
+        self.assertEqual(len(res["issues"]), 0)
+
+    def test_all_output_markdown_files_pass_table_and_ascii_validation(self):
+        import glob
+        output_files = glob.glob(os.path.join(os.path.dirname(__file__), "..", "output", "*.md"))
+        for fpath in output_files:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            table_res = validate_markdown_tables(content)
+            self.assertTrue(table_res["passed"], f"File {os.path.basename(fpath)} has table issues: {table_res['issues']}")
+
+            # For legal reports in output, check ascii issues
+            if "spec" not in fpath:
+                ascii_res = detect_prohibited_ascii(content)
+                self.assertTrue(ascii_res["passed"], f"File {os.path.basename(fpath)} has ASCII issues: {ascii_res['issues']}")
+
+if __name__ == "__main__":
+    unittest.main()
+

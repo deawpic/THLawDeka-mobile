@@ -1,0 +1,17 @@
+[Unit]
+Description=THLawDeka Mobile FastAPI Gateway Service
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=%USER%
+WorkingDirectory=/path/to/THLawDeka-mobile/backend
+ExecStart=/usr/local/bin/uv run uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5s
+Environment="PYTHONUNBUFFERED=1"
+# กำหนดรหัสผ่านลับสำหรับ Admin (หรือปล่อยว่างเพื่อให้ระบบสุ่มสร้างและบันทึกลง backend/.admin_secret อัตโนมัติ)
+# Environment="ADMIN_SECRET=YOUR_CUSTOM_SECURE_SECRET_HERE"
+
+[Install]
+WantedBy=multi-user.target

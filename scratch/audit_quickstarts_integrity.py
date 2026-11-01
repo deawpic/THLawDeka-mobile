@@ -38,25 +38,25 @@ for file_path in files_to_check:
         "### 🔹 7.1",
         "### 🔹 7.2",
         "### 🔹 7.3",
-        "## ❓ 7 ปัญหาที่พบบ่อย",
+        "## ❓ 8 ปัญหาที่พบบ่อย",
         "## 📚 เอกสารอ้างอิงเพิ่มเติม"
     ]
     for sec in required_sections:
         assert sec in content, f"Missing section '{sec}' in {name}"
     print(f"  ✓ All 18 structural sections and subsections are present.")
 
-    # 2. Check troubleshooting questions 1 to 7
-    for i in range(1, 8):
+    # 2. Check troubleshooting questions 1 to 8
+    for i in range(1, 9):
         q_marker = f"{i}. **ถาม:"
         assert q_marker in content, f"Missing question {i} in Troubleshooting of {name}"
-    print(f"  ✓ All 7 troubleshooting questions are continuously and correctly numbered (1 to 7).")
+    print(f"  ✓ All 8 troubleshooting & FAQ questions are continuously and correctly numbered (1 to 8).")
 
     # 3. Check for illegal file:// scheme
     assert "file://" not in content, f"Found illegal 'file://' link in {name}"
     print(f"  ✓ Zero 'file://' URIs detected (100% portable relative links).")
 
     # 4. Check for hardcoded absolute paths (C:\Users, etc.)
-    abs_matches = re.findall(r"(?:[c|C]:\\Users|[c|C]:\\Users\\User|[c|C]:\\Ai_code\\(?!THLawDeka-mobile))", content)
+    abs_matches = re.findall(r"(?:[c|C]:\\Users\\[a-zA-Z0-9]+|[c|C]:\\Ai_code\\(?!THLawDeka-mobile))", content)
     assert not abs_matches, f"Found hardcoded absolute path in {name}: {abs_matches}"
     print(f"  ✓ Zero hardcoded absolute paths detected.")
 

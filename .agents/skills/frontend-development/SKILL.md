@@ -185,3 +185,16 @@ Before completing mobile implementation tasks, verify:
 - [ ] Strict Zero-Test Policy observed: unit/instrumented tests run ONLY if explicitly requested by user prompt.
 - [ ] ⛔ No Gradle build execution: Never run `./gradlew` or `gradle build`; user builds manually in Android Studio.
 - [ ] Files physically exist at designated paths in `android/app/src/main/`.
+---
+
+### Module 9: Multi-Model Selection UI, Dynamic Discovery & SQLite Session Persistence
+
+1. **Top App Bar Quick Model Switcher**:
+   - Compact Chip component displaying active model: `[ ⚡ Gemini 3.8 Flash ▾ ]`
+   - Tap action triggers `ModelSelectionBottomSheet` showing available models with category, badge, and description
+2. **Dynamic Discovery & Offline Fallback**:
+   - Fetch available models from `GET /api/v1/models` on network availability
+   - Provide hardcoded offline fallback models if network is unreachable
+3. **SQLite Model Persistence (`ChatDatabaseHelper.kt`)**:
+   - Column `selected_model` in `chat_sessions` table
+   - Column `model_used` in `chat_messages` table to render model attribution badge per message bubble

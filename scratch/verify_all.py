@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import sys
 import re
 import hashlib
@@ -440,6 +441,55 @@ def evaluate_context_budget(query_bytes):
 assert evaluate_context_budget(1024)["advisory"] is False
 assert evaluate_context_budget(70000)["advisory"] is True
 print("  ✓ Long-Context Budgeting verified: Emits advisory warning when context exceeds 64KB.")
+
+
+print("\n[Step 9] Deterministic Multi-Model Whitelist & Flag Injection Assertions...")
+
+VALID_MODELS = {
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
+    "gpt-oss-120b-medium"
+}
+
+model_regex = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,63}$")
+
+# 9.1 Valid models acceptance
+for m in VALID_MODELS:
+    assert model_regex.match(m) is not None, f"Valid model failed regex: {m}"
+print("  ✓ All 6 supported AI models passed regex and whitelist validation.")
+
+# 9.2 Rejection of Flag Injection & Unsupported models
+malicious_or_invalid_models = [
+    "--dangerously-skip-permissions",
+    "-p",
+    "--model",
+    "-m",
+    "; rm -rf /",
+    "model with spaces",
+    "model\x00null",
+    "../../etc/passwd",
+    "gpt-4o-unknown",
+    "-invalid-start",
+    "claude-unknown-version",
+    "gemini;curl"
+]
+
+for bad_m in malicious_or_invalid_models:
+    is_valid = bool(model_regex.match(bad_m)) and (bad_m in VALID_MODELS)
+    assert not is_valid, f"Security failure: Malicious/invalid model passed validation: {bad_m}"
+print("  ✓ Successfully intercepted all 12 model flag injection and unsupported model attempts.")
+
+# 9.3 Verify Section 3.8 and Section 3.4.10 presence in spec
+assert "### 3.8 ข้อกำหนดระบบเลือกโมเดลปัญญาประดิษฐ์" in spec_content, "Missing Section 3.8 in spec"
+assert "### 3.4.10 ข้อกำหนดการเลือกและสลับโมเดล AI บน Android" in spec_content, "Missing Section 3.4.10 in spec"
+assert "@app.get(\"/api/v1/models\")" in spec_content, "Missing /api/v1/models endpoint in spec"
+assert "fetchAvailableModels" in spec_content, "Missing fetchAvailableModels in LegalChatRepository spec"
+assert "selected_model" in spec_content, "Missing selected_model in ChatDatabaseHelper spec"
+assert "model_used" in spec_content, "Missing model_used in ChatDatabaseHelper spec"
+print("  ✓ Verified Section 3.8, Section 3.4.10, /api/v1/models, and SQLite schema in spec.")
 
 print("\n=======================================================")
 print("  ALL VERIFICATION GATES PASSED DETERMINISTICALLY! (0 errors)")

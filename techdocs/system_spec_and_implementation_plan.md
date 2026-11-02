@@ -728,6 +728,19 @@ flowchart TD
   - แสดงปุ่ม **"ลองใหม่ (Retry)"** บนข้อความนั้น
   - เมื่อผู้ใช้แตะ Retry: แอปจะส่งคำขอเดิมอีกครั้งโดยแนบ `conversation_id` เดิมไปยัง Gateway ทำให้ Core Agent สามารถวิเคราะห์ต่อจากบริบทเดิมได้โดยไม่ต้องพิมพ์ข้อเท็จจริงคดีซ้ำ
 
+### 3.4.10 ข้อกำหนดการเลือกและสลับโมเดล AI บน Android (Top App Bar Model Switcher & BottomSheet Spec)
+เพื่อมอบประสบการณ์การใช้งาน (Mobile UX) ระดับพรีเมียมเทียบชั้นแอปพลิเคชันอย่าง ChatGPT และ Claude ฝั่ง Android Client จะมีระบบจัดการโมเดลดังนี้:
+1. **Top App Bar Quick Model Switcher**:
+   - บน Header หน้าจอแชตหลัก (ใต้ชื่อห้องแชต) จะมี Component ปุ่ม Chip แสดงชื่อโมเดลปัจจุบัน เช่น `[ ⚡ Gemini 3.8 Flash ▾ ]`
+   - เมื่อผู้ใช้แตะ จะเปิด **`ModelSelectionBottomSheet`** ลอยขึ้นมาจากขอบจอด้านล่าง แสดงรายการโมเดลทั้งหมดพร้อม Badge จุดเด่นและคำอธิบายสั้น ๆ
+   - เมื่อแตะเลือกโมเดลใหม่ ตัวแอปจะอัปเดต State และใช้โมเดลนั้นสำหรับคำถามถัดไปทันที
+2. **Dynamic Model Discovery & Offline Fallback**:
+   - เมื่อเปิดแอปและเชื่อมต่อ Gateway สำเร็จ แอปจะเรียก `GET /api/v1/models` เพื่อดึงรายชื่อโมเดลล่าสุดมาแคชไว้ในเครื่อง
+   - หากอยู่ในสถานะออฟไลน์ แอปจะมีชุด Fallback Models ฝังในโค้ด เพื่อให้ผู้ใช้ยังคงเปิดดูและเลือกโมเดลเตรียมไว้ได้
+3. **การบันทึกประวัติโมเดลในฐานข้อมูล SQLite ในเครื่อง (`ChatDatabaseHelper.kt`)**:
+   - ตาราง `chat_sessions` เพิ่มคอลัมน์ `selected_model TEXT DEFAULT 'gemini-3.8-flash-high'` เพื่อจำว่าห้องแชตนี้ใช้โมเดลใด
+   - ตาราง `chat_messages` เพิ่มคอลัมน์ `model_used TEXT` เพื่อให้ในแต่ละบอลลูนคำตอบ สามารถแสดงป้ายกำกับขนาดเล็ก (Badge) เช่น *"ตอบโดย Claude Sonnet 4.6"* ช่วยให้ทนายความสามารถตรวจสอบย้อนหลังได้ว่าข้อกฎหมายนี้วิเคราะห์โดย AI ตัวใด
+
 ---
 
 ### 3.5 โมดูลระบบจัดการกุญแจและหน้าจอผู้ดูแลระบบ (Admin Key Management & Web UI Spec)
@@ -900,6 +913,30 @@ sequenceDiagram
 - **Lazy Loading Mermaid WebView:**
   - `MermaidRendererView` จะไม่ถูก Initialize หรือผูกเข้ากับ View Hierarchy จนกว่าระบบจะตรวจพบแท็ก `mermaid` ในข้อความ Markdown
   - **ผลลัพธ์:** ประหยัดหน่วยความจำ RAM บนอุปกรณ์มือถือไป 50–80 MB ในห้องสนทนาทั่วไปที่ไม่มีแผนผังกระบวนการศาล
+
+---
+
+### 3.8 ข้อกำหนดระบบเลือกโมเดลปัญญาประดิษฐ์ (Multi-Model Selection Architecture & Whitelist Spec)
+
+ระบบ THLawDeka-mobile รองรับการเลือกและสลับโมเดล AI ในระดับเซสชันหรือคำขอ เพื่อให้ทนายความและผู้ใช้งานสามารถเลือกขุมพลังที่เหมาะสมกับลักษณะคดีความ (เช่น งานค้นหาฎีกาทั่วไปเน้นความเร็ว หรือ คดีซับซ้อนเน้นการคิดวิเคราะห์เชิงลึก) โดยมีสถาปัตยกรรมกำกับดังนี้:
+
+#### 3.8.1 รายการโมเดลที่ผ่านการรับรอง (Supported Models Whitelist)
+เกตเวย์จะควบคุมโมเดลผ่าน Whitelist ที่ตรวจสอบความถูกต้อง 100% ป้องกันการส่ง Flag หรือคำสั่งแปลกปลอมเข้า CLI:
+
+| Model ID | ชื่อทางการ (Display Name) | ประเภท (Category) | ป้ายกำกับ (Badge) | คำอธิบายคุณสมบัติ (Capabilities) |
+| :--- | :--- | :--- | :--- | :--- |
+| **`gemini-3.8-flash-high`** | Gemini 3.8 Flash (High) | Fast | แนะนำ / เร็วสุด | ค่าเริ่มต้น (Default) ความเร็วสูง ความแม่นยำทางกฎหมายยอดเยี่ยม เหมาะสำหรับการค้นหาฎีกาเทียบเคียงทั่วไป |
+| **`gemini-3.8-flash-medium`** | Gemini 3.8 Flash (Medium) | Fast | สมดุล | ประมวลผลรวดเร็ว สมดุลระหว่างทรัพยากรและคุณภาพ เหมาะกับคดีแพ่ง-อาญาทั่วไป |
+| **`gemini-3.8-flash-low`** | Gemini 3.8 Flash (Low) | Eco | ประหยัดโควตา | ประหยัดทรัพยากรและโควตาสูงสุด เหมาะกับคำถามสั้นหรือตรวจเลขมาตรา |
+| **`claude-sonnet-4-6`** | Claude Sonnet 4.6 (Thinking) | Thinking | วิเคราะห์ลึก | มีกระบวนการคิดวิเคราะห์ (Reasoning Process) เชิงลึก เหมาะกับการวางรูปคดีความซับซ้อนและการร่างข้อต่อสู้ |
+| **`claude-opus-4-6-thinking`** | Claude Opus 4.6 (Thinking) | Thinking | ปัญญาสูงสุด | โมเดลปัญญาสูงสุดสำหรับการตีความข้อกฎหมายระดับสูง คดีรัฐธรรมนูญ และข้อพิพาททางธุรกิจมูลค่าสูง |
+| **`gpt-oss-120b-medium`** | GPT-OSS 120B (Medium) | OpenSource | Open Weights | โมเดลแบบเปิดประสิทธิภาพสูง สำหรับการค้นคว้ามุมมองเปรียบเทียบและการประมวลผลอิสระ |
+
+#### 3.8.2 มาตรการป้องกัน CLI Flag Injection สำหรับ Model ID
+เพื่อป้องกันผู้ไม่ประสงค์ดีส่งค่าพารามิเตอร์แปลกปลอมเข้าคำสั่ง `agy --model <model>` ผ่านทาง Gateway:
+1. **Regex Validation**: ต้องตรงตามนิพจน์ปกติ `^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,63}$` ห้ามมีช่องว่าง, อักขระพิเศษ, หรือเครื่องหมายขีดหน้าคู่ (`--`) เด็ดขาด
+2. **Whitelist Membership**: ค่า Model ID ที่ส่งเข้ามาต้องอยู่ในชุด `VALID_MODELS` เท่านั้น หากไม่ระบุหรือส่งค่าว่าง ระบบจะกำหนดให้เป็น `gemini-3.8-flash-high` เสมอ
+3. **Safe Subprocess Argument Array**: ส่งผ่านรายการอาร์กิวเมนต์แบบ `shell=False` โดยเพิ่ม `cmd.extend(["--model", req.model])` อย่างเคร่งครัด
 
 ---
 
@@ -1163,6 +1200,59 @@ async def health_check_endpoint(authorization: str = Header(None)):
         "message": "พร้อมให้บริการวิเคราะห์คดีความ (Server-Side Zero-Disk-Write Policy)"
     }
 
+@app.get("/api/v1/models")
+async def list_available_models(authorization: str = Header(None)):
+    """ดึงรายชื่อโมเดลปัญญาประดิษฐ์ที่รองรับในระบบ พร้อมจุดเด่นและคำอธิบายสำหรับแสดงผลบน Android"""
+    await verify_auth(authorization)
+    return {
+        "status": "success",
+        "default": "gemini-3.8-flash-high",
+        "models": [
+            {
+                "id": "gemini-3.8-flash-high",
+                "name": "Gemini 3.8 Flash (High)",
+                "category": "Fast",
+                "badge": "แนะนำ / เร็วสุด",
+                "description": "ตอบรวดเร็ว แม่นยำสูง เหมาะสำหรับการค้นหาฎีกาเทียบเคียงและคำปรึกษาทั่วไป"
+            },
+            {
+                "id": "claude-sonnet-4-6",
+                "name": "Claude Sonnet 4.6 (Thinking)",
+                "category": "Thinking",
+                "badge": "วิเคราะห์ลึก",
+                "description": "เน้นการคิดวิเคราะห์ ใช้เหตุผลซับซ้อน เหมาะกับการวางรูปคดีความและข้อต่อสู้"
+            },
+            {
+                "id": "claude-opus-4-6-thinking",
+                "name": "Claude Opus 4.6 (Thinking)",
+                "category": "Thinking",
+                "badge": "ปัญญาสูงสุด",
+                "description": "โมเดลความฉลาดสูงสุดสำหรับการตีความข้อกฎหมายยากและคดีรัฐธรรมนูญ"
+            },
+            {
+                "id": "gemini-3.8-flash-medium",
+                "name": "Gemini 3.8 Flash (Medium)",
+                "category": "Fast",
+                "badge": "สมดุล",
+                "description": "สมดุลระหว่างความเร็วและทรัพยากร สำหรับคดีความทั่วไป"
+            },
+            {
+                "id": "gemini-3.8-flash-low",
+                "name": "Gemini 3.8 Flash (Low)",
+                "category": "Eco",
+                "badge": "ประหยัดโควตา",
+                "description": "ประหยัดพลังงานและโควตาสูงสุด เหมาะกับคำถามสั้นหรือตรวจเลขมาตรา"
+            },
+            {
+                "id": "gpt-oss-120b-medium",
+                "name": "GPT-OSS 120B (Medium)",
+                "category": "OpenSource",
+                "badge": "Open Weights",
+                "description": "โมเดลโอเพ่นซอร์สประสิทธิภาพสูง สำหรับการค้นคว้ามุมมองเปรียบเทียบ"
+            }
+        ]
+    }
+
 @app.post("/api/v1/chat/stream")
 async def chat_stream_endpoint(
     req: ChatRequest,
@@ -1332,8 +1422,73 @@ class LegalChatRepository {
         activeEventSource = null
     }
 
+    data class AiModelInfo(
+        val id: String,
+        val name: String,
+        val category: String,
+        val badge: String,
+        val description: String
+    )
+
     /**
-     * รับสตรีมคำปรึกษากฎหมายแบบ Gzip Compressed SSE
+     * ดึงรายการโมเดล AI ที่พร้อมใช้งานจาก Gateway (/api/v1/models)
+     */
+    fun fetchAvailableModels(
+        serverUrl: String,
+        apiKey: String,
+        onSuccess: (List<AiModelInfo>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val url = if (serverUrl.endsWith("/api/v1/chat/stream")) {
+            serverUrl.replace("/api/v1/chat/stream", "/api/v1/models")
+        } else {
+            "${serverUrl.trimEnd('/')}/api/v1/models"
+        }
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .get()
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: java.io.IOException) {
+                onError(e.localizedMessage ?: "Network failure")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!response.isSuccessful) {
+                        onError("HTTP Error ${response.code}")
+                        return
+                    }
+                    val body = response.body?.string() ?: ""
+                    try {
+                        val json = JSONObject(body)
+                        val arr = json.getJSONArray("models")
+                        val list = mutableListOf<AiModelInfo>()
+                        for (i in 0 until arr.length()) {
+                            val item = arr.getJSONObject(i)
+                            list.add(
+                                AiModelInfo(
+                                    id = item.getString("id"),
+                                    name = item.getString("name"),
+                                    category = item.optString("category", "General"),
+                                    badge = item.optString("badge", ""),
+                                    description = item.optString("description", "")
+                                )
+                            )
+                        }
+                        onSuccess(list)
+                    } catch (e: Exception) {
+                        onError(e.localizedMessage ?: "JSON Parse error")
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * รับสตรีมคำปรึกษากฎหมายแบบ Gzip Compressed SSE พร้อมระบุโมเดลที่เลือก
      * OkHttp จะทำ Transparent Gzip Decompression ให้อัตโนมัติเมื่อเซิร์ฟเวอร์ส่ง Content-Encoding: gzip
      */
     fun streamConsultation(
@@ -1341,6 +1496,7 @@ class LegalChatRepository {
         apiKey: String,
         query: String,
         conversationId: String?,
+        model: String = "gemini-3.8-flash-high",
         onStatus: (String) -> Unit,
         onToken: (String) -> Unit,
         onDone: () -> Unit,
@@ -1348,6 +1504,7 @@ class LegalChatRepository {
     ) {
         val payload = JSONObject().apply {
             put("query", query)
+            put("model", model)
             if (!conversationId.isNullOrEmpty()) {
                 put("conversation_id", conversationId)
             }
@@ -2157,6 +2314,7 @@ package com.thlawdeka.mobile.data.model
 data class ChatSession(
     val id: String,
     val title: String,
+    val selectedModel: String = "gemini-3.8-flash-high",
     val createdAt: Long,
     val updatedAt: Long,
     val lastMessage: String? = null
@@ -2168,6 +2326,7 @@ data class ChatMessage(
     val role: String, // "user" or "assistant"
     val content: String,
     val status: String, // "sending", "streaming", "completed", "error"
+    val modelUsed: String = "gemini-3.8-flash-high",
     val timestamp: Long
 )
 ```
@@ -2192,6 +2351,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         const val TABLE_SESSIONS = "chat_sessions"
         const val COL_SESSION_ID = "id"
         const val COL_SESSION_TITLE = "title"
+        const val COL_SESSION_MODEL = "selected_model"
         const val COL_SESSION_CREATED = "created_at"
         const val COL_SESSION_UPDATED = "updated_at"
         const val COL_SESSION_LAST_MSG = "last_message"
@@ -2202,6 +2362,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         const val COL_MSG_ROLE = "role"
         const val COL_MSG_CONTENT = "content"
         const val COL_MSG_STATUS = "status"
+        const val COL_MSG_MODEL = "model_used"
         const val COL_MSG_TIMESTAMP = "timestamp"
     }
 
@@ -2216,6 +2377,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
             CREATE TABLE $TABLE_SESSIONS (
                 $COL_SESSION_ID TEXT PRIMARY KEY,
                 $COL_SESSION_TITLE TEXT NOT NULL,
+                $COL_SESSION_MODEL TEXT NOT NULL DEFAULT 'gemini-3.8-flash-high',
                 $COL_SESSION_CREATED INTEGER NOT NULL,
                 $COL_SESSION_UPDATED INTEGER NOT NULL,
                 $COL_SESSION_LAST_MSG TEXT
@@ -2229,6 +2391,7 @@ class ChatDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
                 $COL_MSG_ROLE TEXT NOT NULL,
                 $COL_MSG_CONTENT TEXT NOT NULL,
                 $COL_MSG_STATUS TEXT NOT NULL,
+                $COL_MSG_MODEL TEXT NOT NULL DEFAULT 'gemini-3.8-flash-high',
                 $COL_MSG_TIMESTAMP INTEGER NOT NULL,
                 FOREIGN KEY ($COL_MSG_SESSION_ID) REFERENCES $TABLE_SESSIONS($COL_SESSION_ID) ON DELETE CASCADE
             )

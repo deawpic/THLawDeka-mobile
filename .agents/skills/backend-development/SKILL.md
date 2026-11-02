@@ -144,3 +144,19 @@ Before completing backend implementation tasks, verify:
 - [ ] Python syntax compiles without errors (`python -m py_compile backend/main.py`).
 - [ ] Strict Zero-Test Policy observed: unit tests run ONLY if explicitly requested by user prompt.
 - [ ] No local secret keys or absolute paths hardcoded.
+---
+
+### Module 10: Multi-Model Discovery & Security Whitelist (`GET /api/v1/models`)
+
+1. **Supported Model Whitelist**:
+   - `gemini-3.8-flash-high` (Default, Fast, High Accuracy)
+   - `gemini-3.8-flash-medium` (Fast, Balanced)
+   - `gemini-3.8-flash-low` (Eco, Token-Saver)
+   - `claude-sonnet-4-6` (Thinking, Deep Reasoning, Legal Analysis)
+   - `claude-opus-4-6-thinking` (Thinking, Top Intelligence, High-Complexity Cases)
+   - `gpt-oss-120b-medium` (Open Weights, Comparative Law)
+
+2. **Security & Injection Guardrail**:
+   - Validate model input with regex: `^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,63}$`
+   - Hard Reject any input not in `VALID_MODELS`
+   - Pass safely to subprocess: `cmd.extend(["--model", req.model])` with `shell=False`
